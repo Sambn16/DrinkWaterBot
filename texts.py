@@ -26,7 +26,7 @@ help_command_text = """خب خب. خیلی خوشحالم که واقعا قرا
 
 
 good_morning_text = """صبح بخیر! امروز {date}ه. برای یه روز پرآب آماده‌ای؟ """
-
+good_morning_text_for_groups = """صبحتون بخیر! امروز {date}ه. برای یه روز پرآب آماده‌اید؟ """
 
 reminder_texts = [
     "آب بخور",
@@ -46,5 +46,21 @@ reminder_texts = [
 ]
 
 good_night_text = "امروز {drinks_today} بار آب خوردی. الان هم که دیگه وقت خوابه. شب بخیر!"
+good_night_text_for_groups = "امروز {chat_drinks_today} بار آب خوردید. الان هم که دیگه وقت خوابه. شب بخیر!"
 
-reminder_keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("خوردم!", callback_data="drank")]])
+group_leaderboard_today_text = """"📅 رده بندی آب‌خورهای امروز!
+
+{leaderboard}
+"""
+group_leaderboard_text = """🏆 رده بندی کل آب‌خورها!
+
+{leaderboard}
+"""
+
+def reminder_keyboard(reminder_id):
+    keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("خوردم!", callback_data=f"drank:{reminder_id}")]])
+    return keyboard
+
+def leaderboard_keyboard():
+    keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("لیدربورد کل", callback_data="all"), InlineKeyboardButton("لیدربورد امروز", callback_data="today")]])
+    return keyboard

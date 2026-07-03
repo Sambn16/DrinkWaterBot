@@ -53,7 +53,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await context.bot.send_message(chat_id= -1001925381494, text= text)
     if not user_exists(chatId):
 
-        save_user_data(chatId, name, username, status="Off", drank=0)
+        save_user(chatId, name, username, status="Off", drank=0)
 
         await context.bot.send_message(chat_id= chatId,text=f"""سلام {FirstName}!
 
@@ -124,12 +124,12 @@ async def gm(context: ContextTypes.DEFAULT_TYPE):
 async def on(update, context):
     status = True
     chatId = update.effective_chat.id
-    set_user_status(chatId, 'On')
+    set_chat_status(chatId, 'On')
     text = """خیلی خب!
  از این به بعد از ساعت ۸ صبح تا ۱۰ شب یادت میندازم که آب بخوری. نمی‌ذارم دیگه یادت بره."""
     await context.bot.send_message(chat_id= chatId, text= text)
     print("user sent the on command")
-    user_status = get_user_status(chatId)
+    user_status = get_chat_status(chatId)
 
     if user_status == "On" and status:
         
@@ -159,7 +159,7 @@ async def off(update, context):
     FirstName = update.message.chat.first_name
     username = update.message.chat.username
     chatId = update.effective_chat.id
-    set_user_status(chatId, 'Off')
+    set_chat_status(chatId, 'Off')
     now = datetime.datetime.now(pytz.timezone('Asia/Tehran'))
     tform = now.strftime('%H:%M:%S')
     text = f"user {FirstName}, with id number: {chatId} and username @{username},  turned off the bot at {tform}"
@@ -197,7 +197,7 @@ def reset_drank(chatId):
     conn.commit()
     conn.close()
 
-def set_user_status(chatId, status):
+def set_chat_status(chatId, status):
     conn = sqlite3.connect('database.db')
     cursor = conn.cursor()
 
@@ -217,7 +217,7 @@ def user_exists(chatId):
 
     return result is not None
 
-def save_user_data(chatId, name, username, status, drank):
+def save_user(chatId, name, username, status, drank):
     conn = sqlite3.connect('database.db')
     cursor = conn.cursor()
 
@@ -261,7 +261,7 @@ async def lateNight(update, context):
     reset_drank(chatId)
 
 
-def get_user_status(chatId):
+def get_chat_status(chatId):
     conn = sqlite3.connect('database.db')
     cursor = conn.cursor()
 
