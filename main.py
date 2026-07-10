@@ -132,11 +132,14 @@ async def today_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def daily_message(context: ContextTypes.DEFAULT_TYPE):
+    chat = await context.bot.get_chat(context.job.chat_id)
+
     if context.job.name == f"morning_{context.job.chat_id}":
         await context.bot.send_message(
             chat_id=context.job.chat_id,
             text=good_morning_text.format(date=get_today_date()),
         )
+        
     elif context.job.name == f"night_{context.job.chat_id}":
         if chat.type == "private":
             await context.bot.send_message(
@@ -145,17 +148,18 @@ async def daily_message(context: ContextTypes.DEFAULT_TYPE):
                     drinks_today=get_drinks_today_count(context.job.chat_id)
                 ),
             )
+            update_user_data(context.job.chat_id, chat.first_name, chat.username)
 
         elif chat.type in ["group", "supergroup"]:
             await context.bot.send_message(
                 chat_id=context.job.chat_id,
                 text=good_night_text_for_groups.format(
-                    drinks_today=get_group_drinks_today(context.job.chat_id)
+                    chat_drinks_today=get_group_drinks_today(context.job.chat_id)
                 ),
             )
 
-    chat = await context.bot.get_chat(context.job.chat_id)
-    update_user_data(context.job.chat_id, chat.first_name, chat.username)
+    
+    
 
 
 # ========== DRINKING REMINDER MESSAGE SEND ==========
@@ -222,10 +226,10 @@ async def drank_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
             pass
     elif message.chat.type == "private":
         await query.edit_message_reply_markup(reply_markup=None)
-
+    username_text = f"@{user.username}" if user.username else "NOT_SET"
     await context.bot.send_message(
         chat_id=LOG_CHANNEL_ID,
-        text=f"user {user.first_name} just drank water!",
+        text=f"user {user.first_name} ({username_text}) just drank water!",
         parse_mode="HTML",
     )
 
@@ -253,15 +257,15 @@ def schedule_user_jobs(job_queue, chat_id):
         daily_message,
         time=time(8, 0, tzinfo=tz),
         chat_id=chat_id,
-        name=f"morning_{chat_id}",
+        name=f"morning_{chat_id}"
     )
 
     job_queue.run_daily(
         daily_message,
         time=time(23, 0, tzinfo=tz),
         chat_id=chat_id,
-        name=f"night_{chat_id}",
-    ),
+        name=f"night_{chat_id}"
+    )
 
 
 async def enable_reminding(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -413,18 +417,19 @@ drinks in total: {user[6]}
 
 async def send_admin_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.message.from_user.id
-    user_ids = []
+    users = []
     for user in get_all_users():
-        user_ids.append(int(user[3]))
+        users.append(user)
     if chat_id in ADMINS:
-        for user_id in user_ids:
+        for user in users:
+            print(user)
             try:
                 text = update.message.text.replace("/admin_message ", "")
-                await context.bot.send_message(chat_id=user_id, text=text)
+                await context.bot.send_message(chat_id=user[3], text=text)
 
             except Exception as e:
                 await context.bot.send_message(
-                    chat_id=chat_id, text=f"failed to send message to {update.message.from_user.first_name}, @{update.message.from_user.username}({user_id}): {e}"
+                    chat_id=chat_id, text=f"failed to send message to {user[1]}, @{user[2]} ({user[3]}): {e}"
                 )
     else:
         pass
