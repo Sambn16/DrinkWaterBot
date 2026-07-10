@@ -21,7 +21,10 @@ from database import (
     get_group_drinks_total,
     get_group_leaderboard,
     get_group_leaderboard_all,
-    get_all_users_sorted
+    get_all_users_sorted,
+    get_chat_settings,
+    update_user_cooldown,
+    check_user_cooldown,
 )
 from texts import (
     help_command_text,
@@ -33,7 +36,7 @@ from texts import (
     good_night_text_for_groups,
     group_leaderboard_text,
     group_leaderboard_today_text,
-    leaderboard_keyboard
+    leaderboard_keyboard,
 )
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
@@ -41,7 +44,7 @@ from telegram.ext import (
     CommandHandler,
     ContextTypes,
     CallbackQueryHandler,
-    ChatMemberHandler
+    ChatMemberHandler,
 )
 from dotenv import load_dotenv
 from datetime import time, timedelta, datetime
@@ -59,9 +62,9 @@ tz = pytz.timezone("Asia/Tehran")
 
 app = ApplicationBuilder().token(TOKEN).build()
 
-setup_database()
-migrate_database()
 
+migrate_database()
+setup_database()
 
 # ========== /START COMMAND ==========
 
@@ -76,9 +79,14 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 0,
                 0,
                 0,
-                )
+            )
 
-            save_chat(update.message.chat_id, update.message.chat.type, update.message.chat.title, 1)
+            save_chat(
+                update.message.chat_id,
+                update.message.chat.type,
+                update.message.chat.title,
+                1,
+            )
 
             await update.message.reply_text(
                 f"سلام {update.message.from_user.first_name}!{start_command_text}"
@@ -90,19 +98,28 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
 
         else:
-            save_chat(update.message.chat_id, update.message.chat.type, update.message.chat.title, 1)
+            save_chat(
+                update.message.chat_id,
+                update.message.chat.type,
+                update.message.chat.title,
+                1,
+            )
             await update.message.reply_text("قبلا بات رو استارت کردی!")
             await context.bot.send_message(
                 chat_id=LOG_CHANNEL_ID,
                 text=f"user {update.message.from_user.first_name}, with username @{update.message.from_user.username} and ID {update.message.from_user.id} started the bot again. ",
             )
-    elif update.effective_chat.type == "supergroup" or update.effective_chat.type == "group":
-            save_chat(
+    elif (
+        update.effective_chat.type == "supergroup"
+        or update.effective_chat.type == "group"
+    ):
+        save_chat(
             update.effective_chat.id,
             update.effective_chat.type,
             update.effective_chat.title or update.effective_chat.first_name,
             0,
-            )
+        )
+
 
 # ========== /HELP COMMAND ==========
 
@@ -121,25 +138,26 @@ async def today_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     تعداد آب‌های امروز: {get_drinks_today_count(chat_id)}
     تعداد کل آب‌ها: {get_drinks_total_count(chat_id)}""")
-        
+
     else:
         await update.message.reply_text(f"""امروز {get_today_date()} است.
 
     تعداد آب‌های امروز گروه: {get_group_drinks_today(chat_id)}
     تعداد کل آب‌های گروه: {get_group_drinks_total(chat_id)}""")
 
+
 # ========== DAILY GM GN MESSAGES ==========
 
 
 async def daily_message(context: ContextTypes.DEFAULT_TYPE):
     chat = await context.bot.get_chat(context.job.chat_id)
-
+    from database import reset_chat_stats
     if context.job.name == f"morning_{context.job.chat_id}":
         await context.bot.send_message(
             chat_id=context.job.chat_id,
             text=good_morning_text.format(date=get_today_date()),
         )
-        
+
     elif context.job.name == f"night_{context.job.chat_id}":
         if chat.type == "private":
             await context.bot.send_message(
@@ -148,6 +166,7 @@ async def daily_message(context: ContextTypes.DEFAULT_TYPE):
                     drinks_today=get_drinks_today_count(context.job.chat_id)
                 ),
             )
+            reset_chat_stats(context.job.chat_id, is_private=True)
             update_user_data(context.job.chat_id, chat.first_name, chat.username)
 
         elif chat.type in ["group", "supergroup"]:
@@ -157,15 +176,13 @@ async def daily_message(context: ContextTypes.DEFAULT_TYPE):
                     chat_drinks_today=get_group_drinks_today(context.job.chat_id)
                 ),
             )
-
-    
-    
-
+            reset_chat_stats(context.job.chat_id, is_private=False)
 
 # ========== DRINKING REMINDER MESSAGE SEND ==========
 
 
 async def drink_water(context: ContextTypes.DEFAULT_TYPE):
+    start_hour, end_hour, total_reminders = get_chat_settings(context.job.chat_id)
     now = datetime.now(tz)
     last_message_id = context.job.data["last_message_id"]
 
@@ -179,9 +196,14 @@ async def drink_water(context: ContextTypes.DEFAULT_TYPE):
         except Exception:
             pass
 
-    if not (8 <= now.hour <= 21):
-        return
+    if start_hour <= end_hour:
+            is_awake = start_hour <= now.hour <= end_hour
+    else:
+        is_awake = now.hour >= start_hour or now.hour <= end_hour
 
+    if not is_awake:
+            return
+    
     reminder_id = now.strftime("%Y%m%d%H%M%S")
 
     message = await context.bot.send_message(
@@ -199,8 +221,15 @@ async def drank_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     user = query.from_user
     message = query.message
+    current_time_str = datetime.now(tz).isoformat()
 
-    
+    allowed, minutes_left = check_user_cooldown(user.id, current_time_str)
+
+    if not allowed:
+        await query.answer(text=f"⚠️ تند تند آب نخور. هنوز وقت آبت نشده! {minutes_left} دقیقه دیگه صبر کن.", show_alert=True)
+        return
+
+
     action, reminder_id = query.data.split(":")
 
     if not user_exists(user.id):
@@ -212,16 +241,24 @@ async def drank_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     add_claim(user.id, reminder_id)
-    drinks_increment(user.id)
-
-    text = f"آفرین! آب‌های امروزت تا الان: {get_drinks_today_count(user.id)} تا."
-    await query.answer(text=text)
     
+    drinks_today = drinks_increment(user.id)
+
+    if drinks_today == 8:
+        text = f"آفرین! این هشتمین لیوان آبت بود. رکورد زنجیره‌ات رو حفظ کردی 🔥"
+        await query.answer(text=text, show_alert=True)
+    
+    else:
+        text = f"آفرین! آب‌های امروزت تا الان: {get_drinks_today_count(user.id)} تا."
+        await query.answer(text=text)
+
     if message.chat.type in ["group", "supergroup"]:
         new_text = f"{message.text}\n{user.first_name} آب خورد!"
         linking_to_group(update.effective_chat.id, user.id)
         try:
-            await query.edit_message_text(text=new_text, reply_markup=message.reply_markup)
+            await query.edit_message_text(
+                text=new_text, reply_markup=message.reply_markup
+            )
         except:
             pass
     elif message.chat.type == "private":
@@ -244,9 +281,22 @@ def seconds_until_next_hour():
 
 
 def schedule_user_jobs(job_queue, chat_id):
+    start_hour, end_hour, total_reminders = get_chat_settings(chat_id)
+    if end_hour > start_hour:
+        total_hours = end_hour - start_hour
+    else:
+        total_hours = (24 - start_hour) + end_hour
+
+    seconds_window = total_hours * 3600
+    dynamic_interval = int(seconds_window / total_reminders)
+
+    dynamic_cooldown = int(dynamic_interval / 2)
+
+    update_user_cooldown(chat_id, dynamic_cooldown)
+
     job_queue.run_repeating(
         drink_water,
-        interval=3600,
+        interval=dynamic_interval,
         first=seconds_until_next_hour(),
         chat_id=chat_id,
         name=f"remind_{chat_id}",
@@ -255,16 +305,16 @@ def schedule_user_jobs(job_queue, chat_id):
 
     job_queue.run_daily(
         daily_message,
-        time=time(8, 0, tzinfo=tz),
+        time=time(start_hour - 1, 0, tzinfo=tz),
         chat_id=chat_id,
-        name=f"morning_{chat_id}"
+        name=f"morning_{chat_id}",
     )
 
     job_queue.run_daily(
         daily_message,
-        time=time(23, 0, tzinfo=tz),
+        time=time(end_hour + 1, 0, tzinfo=tz),
         chat_id=chat_id,
-        name=f"night_{chat_id}"
+        name=f"night_{chat_id}",
     )
 
 
@@ -333,14 +383,21 @@ async def disable_reminding(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
+
 # ========== LEADERBOARD ==========
+
 
 def format_group_leaderboard_text(data):
     text = ""
     for user, (name, drinks_today) in enumerate(data, 1):
-        rank = "🥇" if user == 1 else "🥈" if user == 2 else "🥉" if user == 3 else f"{user}."
+        rank = (
+            "🥇"
+            if user == 1
+            else "🥈" if user == 2 else "🥉" if user == 3 else f"{user}."
+        )
         text += f"{rank} {name}: {drinks_today} بار.\n"
     return text
+
 
 async def leaderboard_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
@@ -348,30 +405,39 @@ async def leaderboard_command(update: Update, context: ContextTypes.DEFAULT_TYPE
         chat_id = update.effective_chat.id
         data = get_group_leaderboard(chat_id)
         if not data:
-            await update.message.reply_text("هیچکس اینجا هنوز آب نخورده! وا؟؟ آب بخورید دیگه.", reply_to_message_id=update.message.message_id)
+            await update.message.reply_text(
+                "هیچکس اینجا هنوز آب نخورده! وا؟؟ آب بخورید دیگه.",
+                reply_to_message_id=update.message.message_id,
+            )
             return
 
-        
-
-        await update.message.reply_text(group_leaderboard_today_text.format(leaderboard=format_group_leaderboard_text(data)), reply_markup=leaderboard_keyboard())
+        await update.message.reply_text(
+            group_leaderboard_today_text.format(
+                leaderboard=format_group_leaderboard_text(data)
+            ),
+            reply_markup=leaderboard_keyboard(),
+        )
 
     else:
-        await update.message.reply_text("این کامند فقط برای گروه‌هاست. دلت می‌خواد استفاده کنی؟ من رو به یکی از گروه‌هات اضافه کن!")
+        await update.message.reply_text(
+            "این کامند فقط برای گروه‌هاست. دلت می‌خواد استفاده کنی؟ من رو به یکی از گروه‌هات اضافه کن!"
+        )
 
 
 # ========== LEADERBOARD BUTTONS ==========
+
 
 async def leaderboard_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     chat_id = query.message.chat.id
-    
+
     # Check which button was tapped
     if query.data == "today":
         data = get_group_leaderboard(chat_id)
         leaderboard_text = group_leaderboard_today_text
-    
-    else: # This is the "all" button
+
+    else:  # This is the "all" button
         data = get_group_leaderboard_all(chat_id)
         leaderboard_text = group_leaderboard_text
     if not data:
@@ -379,9 +445,8 @@ async def leaderboard_button(update: Update, context: ContextTypes.DEFAULT_TYPE)
     else:
         await query.edit_message_text(
             leaderboard_text.format(leaderboard=format_group_leaderboard_text(data)),
-            reply_markup=leaderboard_keyboard()
+            reply_markup=leaderboard_keyboard(),
         )
-
 
 
 # ========== ADMIN STUFF ==========
@@ -417,19 +482,20 @@ drinks in total: {user[6]}
 
 async def send_admin_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.message.from_user.id
+
     users = []
     for user in get_all_users():
         users.append(user)
     if chat_id in ADMINS:
         for user in users:
-            print(user)
             try:
                 text = update.message.text.replace("/admin_message ", "")
                 await context.bot.send_message(chat_id=user[3], text=text)
 
             except Exception as e:
                 await context.bot.send_message(
-                    chat_id=chat_id, text=f"failed to send message to {user[1]}, @{user[2]} ({user[3]}): {e}"
+                    chat_id=chat_id,
+                    text=f"failed to send message to {user[1]}, @{user[2]} ({user[3]}): {e}",
                 )
     else:
         pass
@@ -437,13 +503,17 @@ async def send_admin_message(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
 # ========== GROUP SETTINGS ==========
 
+
 async def track_chat_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
     status = update.my_chat_member.new_chat_member.status
 
     if status in ["member", "administrator"]:
         chat = update.effective_chat
         save_chat(chat.id, chat.type, chat.title, 1)
-        await context.bot.send_message(chat_id=chat.id, text="سلام! خوشحالم که من رو به گروهتون اد کردید. برای یادگیری دستوراتم /help رو بزنید.")
+        await context.bot.send_message(
+            chat_id=chat.id,
+            text="سلام! خوشحالم که من رو به گروهتون اد کردید. برای یادگیری دستوراتم /help رو بزنید.",
+        )
         await context.bot.send_message(
             chat_id=LOG_CHANNEL_ID,
             text=f"group <b>{chat.title}</b>, with id {chat.id} added the bot.",
@@ -451,7 +521,6 @@ async def track_chat_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
     else:
         pass
-
 
 
 # ========== RESTORING THE JOBS FROM DATABASE ==========
@@ -462,16 +531,6 @@ def restore_jobs(app):
     users = get_all_enabled_users()
     for chat_id in users:
         schedule_user_jobs(app.job_queue, chat_id)
-
-
-# ========== RESETTING TODAY'S DRINKS ==========
-
-
-def reset_daily_stats(context: ContextTypes.DEFAULT_TYPE):
-    drinks_today_reset()
-
-
-app.job_queue.run_daily(reset_daily_stats, time=time(0, 0, tzinfo=tz))
 
 
 # ========== CONFIGURATIONS & STARTUP ===========
@@ -498,11 +557,7 @@ app.add_handler(CommandHandler("all_users", show_all_users))
 app.add_handler(CommandHandler("admin_message", send_admin_message))
 app.add_handler(CommandHandler("leaderboard", leaderboard_command))
 app.add_handler(ChatMemberHandler(track_chat_member))
-app.add_handler(
-    CallbackQueryHandler(drank_button, pattern=r"^drank:")
-)
-app.add_handler(
-    CallbackQueryHandler(leaderboard_button, pattern=r"^(today|all)$")
-)
+app.add_handler(CallbackQueryHandler(drank_button, pattern=r"^drank:"))
+app.add_handler(CallbackQueryHandler(leaderboard_button, pattern=r"^(today|all)$"))
 
 app.run_polling()

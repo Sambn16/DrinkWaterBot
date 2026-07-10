@@ -1,5 +1,6 @@
 import sqlite3
 import khayyam
+from datetime import datetime
 
 # ========== GLOBAL DATABASE CONNECTION ==========
 conn = sqlite3.connect("database.db", check_same_thread=False)
@@ -19,7 +20,13 @@ def setup_database():
             chat_id INTEGER UNIQUE,
             status INTEGER DEFAULT 1,
             drinks_today INTEGER DEFAULT 0,
-            drinks_total INTEGER DEFAULT 0
+            drinks_total INTEGER DEFAULT 0,
+            start_hour INTEGER DEFAULT 9,
+            end_hour INTEGER DEFAULT 22,
+            total_reminders INTEGER DEFAULT 14,
+            streak_count INTEGER DEFAULT 0,
+            cooldown_seconds INTEGER DEFAULT 2160,
+            last_drink_time INTEGER DEFAULT 0
         )
     """)
 
@@ -28,7 +35,10 @@ def setup_database():
             chat_id INTEGER PRIMARY KEY,
             chat_type TEXT,
             title TEXT, 
-            status INTEGER DEFAULT 0
+            status INTEGER DEFAULT 0,
+            start_hour INTEGER DEFAULT 9,
+            end_hour INTEGER DEFAULT 22,
+            total_reminders INTEGER DEFAULT 14
         )
     """)
 
@@ -67,6 +77,18 @@ def setup_database():
 
 
 def migrate_database():
+    # cursor = conn.cursor()
+    # cursor.execute("ALTER TABLE chats ADD COLUMN start_hour INTEGER DEFAULT 9;")
+    # cursor.execute("ALTER TABLE chats ADD COLUMN end_hour INTEGER DEFAULT 22;")
+    # cursor.execute("ALTER TABLE chats ADD COLUMN total_reminders INTEGER DEFAULT 14;    ")
+    
+    # cursor.execute("ALTER TABLE users ADD COLUMN start_hour INTEGER DEFAULT 9;")
+    # cursor.execute("ALTER TABLE users ADD COLUMN end_hour INTEGER DEFAULT 22;")
+    # cursor.execute("ALTER TABLE users ADD COLUMN total_reminders INTEGER DEFAULT 14;    ")
+    # cursor.execute("ALTER TABLE users ADD COLUMN streak_count INTEGER DEFAULT 0;")
+    # cursor.execute("ALTER TABLE users ADD COLUMN cooldown_seconds INTEGER DEFAULT 21600;")
+    # cursor.execute("ALTER TABLE users ADD COLUMN last_drink_time TEXT;")
+    # conn.commit()
     pass
 
 
@@ -98,6 +120,7 @@ def save_chat(chat_id, chat_type, title, status):
     )
 
     conn.commit()
+
 
 def linking_to_group(chat_id, user_id):
     cursor = conn.cursor()
@@ -154,6 +177,64 @@ def get_chat_status(chat_id):
     return result[0] if result else 0
 
 
+def update_user_cooldown(chat_id, cooldown_seconds):
+    cursor = conn.cursor()
+    cursor.execute("UPDATE users SET cooldown_seconds=? WHERE chat_id=?", (cooldown_seconds, chat_id))
+    conn.commit()
+
+def update_user_last_drink_time(chat_id, last_drink_time):
+    cursor = conn.cursor()
+    cursor.execute("UPDATE users SET last_drink_time=? WHERE chat_id=?", (last_drink_time, chat_id))
+    conn.commit()
+
+
+def get_user_cooldown(chat_id):
+    cursor = conn.cursor()
+    cursor.execute("SELECT cooldown_seconds FROM users WHERE chat_id=?", (chat_id,))
+    result = cursor.fetchone()
+    return result if result else (None, 2160)
+
+
+def check_user_cooldown(chat_id, last_drink_time):
+    cursor = conn.cursor()
+    cursor.execute("SELECT last_drink_time, cooldown_seconds FROM users WHERE chat_id=?", (chat_id,))
+    row = cursor.fetchone()
+    if row:
+        last_drink_raw, cooldown_seconds = row
+
+        if last_drink_raw and last_drink_raw != "0" and isinstance(last_drink_raw, str):
+            last_drink = datetime.fromisoformat(last_drink_raw)
+            current = datetime.fromisoformat(last_drink_time)
+            time_passed = (current - last_drink).total_seconds()
+            if time_passed < cooldown_seconds:
+                minutes_left = int((cooldown_seconds - time_passed) / 60)
+                return False, (minutes_left if  minutes_left > 0 else 1)
+            
+        cursor.execute("UPDATE users SET last_drink_time=? WHERE chat_id=?", (last_drink_time, chat_id))
+        conn.commit()
+        return True, 0
+    return False, 0
+
+
+def reset_chat_stats(chat_id, is_private):
+    cursor = conn.cursor()
+    if is_private:
+        cursor.execute("SELECT drinks_today FROM users WHERE chat_id=?", (chat_id,))
+        row = cursor.fetchone()
+        drinks_today = row[0] if row else 0
+
+        if drinks_today >= 8:
+            cursor.execute("UPDATE users SET streak_count = streak_count + 1 WHERE chat_id = ?", (chat_id,))
+        else:
+            cursor.execute("UPDATE users SET streak_count = 0 WHERE chat_id = ?", (chat_id,))
+                
+        
+        cursor.execute("UPDATE users SET drinks_today = 0 WHERE chat_id = ?", (chat_id,))
+    else:
+        cursor.execute("DELETE FROM chat_members WHERE chat_id = ?", (chat_id,))
+        
+    conn.commit()
+
 # ========== ADMIN STUFF ==========
 
 
@@ -187,6 +268,22 @@ def get_all_users_sorted():
     return users
 
 
+# ========== USER SETTINGS ==========
+
+def get_chat_settings(chat_id):
+
+    cursor = conn.cursor()
+    cursor.execute("SELECT chat_type FROM chats WHERE chat_id = ?", (chat_id,))
+    chat_row = cursor.fetchone()
+    if chat_row and chat_row[0] in ["group", "supergroup"]:
+        cursor.execute("SELECT start_hour, end_hour, total_reminders FROM chats WHERE chat_id = ?", (chat_id,))
+    else:
+        cursor.execute("SELECT start_hour, end_hour, total_reminders FROM users WHERE chat_id = ?", (chat_id,))
+
+    result = cursor.fetchone()
+
+    return result if result else (9, 22, 14)
+
 
 # ========== DRINKS FUNCTIONS ==========
 
@@ -203,6 +300,10 @@ def drinks_increment(chat_id):
     )
 
     conn.commit()
+    cursor.execute("SELECT drinks_today FROM users WHERE chat_id=?", (chat_id,))
+    result = cursor.fetchone()
+    
+    return result[0] if result else 0
 
 
 def get_drinks_today_count(chat_id):
@@ -250,6 +351,16 @@ def drinks_today_reset():
 
     cursor = conn.cursor()
 
+    cursor.execute("""
+        UPDATE users 
+        SET streak_count = streak_count + 1 
+        WHERE drinks_today >= 8
+    """)
+    cursor.execute("""
+        UPDATE users 
+        SET streak_count = 0 
+        WHERE drinks_today < 8
+    """)
     cursor.execute("UPDATE users SET drinks_today=0")
 
     conn.commit()
