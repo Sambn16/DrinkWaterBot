@@ -57,6 +57,16 @@ group_leaderboard_text = """🏆 رده بندی کل آب‌خورها!
 {leaderboard}
 """
 
+
+settings_text = """<b>تنظیمات بات</b>
+
+⏰ ساعت شروع: <code>{start_hour}</code>
+😴 ساعت پایان: <code>{end_hour}</code>
+🔔 تعداد ریمایندر: <code>{total_reminders}</code>
+"""
+
+
+
 def reminder_keyboard(reminder_id):
     keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("خوردم!", callback_data=f"drank:{reminder_id}")]])
     return keyboard
@@ -64,3 +74,5 @@ def reminder_keyboard(reminder_id):
 def leaderboard_keyboard():
     keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("لیدربورد کل", callback_data="all"), InlineKeyboardButton("لیدربورد امروز", callback_data="today")]])
     return keyboard
+
+

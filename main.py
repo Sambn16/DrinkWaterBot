@@ -13,7 +13,6 @@ from database import (
     get_today_date,
     get_drinks_today_count,
     get_drinks_total_count,
-    drinks_today_reset,
     has_user_claimed,
     add_claim,
     linking_to_group,
@@ -25,8 +24,9 @@ from database import (
     get_chat_settings,
     update_user_cooldown,
     check_user_cooldown,
+    update_chat_settings,
 )
-from texts import (
+from assets.texts import (
     help_command_text,
     start_command_text,
     reminder_texts,
@@ -37,7 +37,9 @@ from texts import (
     group_leaderboard_text,
     group_leaderboard_today_text,
     leaderboard_keyboard,
+    settings_text,
 )
+from assets.keyboards import settings_keyboard
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     ApplicationBuilder,
@@ -146,12 +148,29 @@ async def today_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     تعداد کل آب‌های گروه: {get_group_drinks_total(chat_id)}""")
 
 
+# ========== /SETTINGS COMMAND ==========
+
+
+async def settings(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    start_hour, end_hour, total_reminders = get_chat_settings(update.effective_chat.id)
+    chat_id = update.effective_chat.id
+
+    await update.message.reply_text(
+        settings_text.format(
+            start_hour=start_hour, end_hour=end_hour, total_reminders=total_reminders
+        ),
+        reply_markup=settings_keyboard,
+        parse_mode="HTML",
+    )
+
+
 # ========== DAILY GM GN MESSAGES ==========
 
 
 async def daily_message(context: ContextTypes.DEFAULT_TYPE):
     chat = await context.bot.get_chat(context.job.chat_id)
     from database import reset_chat_stats
+
     if context.job.name == f"morning_{context.job.chat_id}":
         await context.bot.send_message(
             chat_id=context.job.chat_id,
@@ -178,6 +197,7 @@ async def daily_message(context: ContextTypes.DEFAULT_TYPE):
             )
             reset_chat_stats(context.job.chat_id, is_private=False)
 
+
 # ========== DRINKING REMINDER MESSAGE SEND ==========
 
 
@@ -197,13 +217,13 @@ async def drink_water(context: ContextTypes.DEFAULT_TYPE):
             pass
 
     if start_hour <= end_hour:
-            is_awake = start_hour <= now.hour <= end_hour
+        is_awake = start_hour <= now.hour <= end_hour
     else:
         is_awake = now.hour >= start_hour or now.hour <= end_hour
 
     if not is_awake:
-            return
-    
+        return
+
     reminder_id = now.strftime("%Y%m%d%H%M%S")
 
     message = await context.bot.send_message(
@@ -226,9 +246,11 @@ async def drank_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     allowed, minutes_left = check_user_cooldown(user.id, current_time_str)
 
     if not allowed:
-        await query.answer(text=f"⚠️ تند تند آب نخور. هنوز وقت آبت نشده! {minutes_left} دقیقه دیگه صبر کن.", show_alert=True)
+        await query.answer(
+            text=f"⚠️ تند تند آب نخور. هنوز وقت آبت نشده! {minutes_left} دقیقه دیگه صبر کن.",
+            show_alert=True,
+        )
         return
-
 
     action, reminder_id = query.data.split(":")
 
@@ -241,13 +263,13 @@ async def drank_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     add_claim(user.id, reminder_id)
-    
+
     drinks_today = drinks_increment(user.id)
 
     if drinks_today == 8:
         text = f"آفرین! این هشتمین لیوان آبت بود. رکورد زنجیره‌ات رو حفظ کردی 🔥"
         await query.answer(text=text, show_alert=True)
-    
+
     else:
         text = f"آفرین! آب‌های امروزت تا الان: {get_drinks_today_count(user.id)} تا."
         await query.answer(text=text)
@@ -269,6 +291,49 @@ async def drank_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         text=f"user {user.first_name} ({username_text}) just drank water!",
         parse_mode="HTML",
     )
+
+
+# ========== SETTINGS BUTTONS ==========
+
+
+async def settings_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    user = query.from_user
+
+    prefix, action, attribute = query.data.split(":")
+
+    success, new_value = update_chat_settings(user.id, attribute, action)
+
+    if not success and attribute == "total_reminders":
+        await query.answer(
+            text=f"تعداد ریمایندر باید بین 8 تا 14 باشه!", show_alert=True
+        )
+        return
+    await query.answer(text=f"✅ تغییرات بات ذخیره شد!")
+    job_name = f"remind_{user.id}"
+    active_jobs = context.job_queue.get_jobs_by_name(job_name)
+
+    if active_jobs:
+        for name in [f"morning_{user.id}", f"night_{user.id}", f"remind_{user.id}"]:
+            for job in context.job_queue.get_jobs_by_name(name):
+                job.schedule_removal()
+
+        schedule_user_jobs(context.job_queue, user.id)
+
+    try:
+        start_hour, end_hour, total_reminders = get_chat_settings(user.id)
+
+        await query.edit_message_text(
+            text=settings_text.format(
+                start_hour=start_hour,
+                end_hour=end_hour,
+                total_reminders=total_reminders,
+            ),
+            reply_markup=settings_keyboard,
+            parse_mode="HTML",
+        )
+    except Exception:
+        pass
 
 
 # ========== ENABLING THE REMINDER ==========
@@ -457,13 +522,13 @@ async def show_all_users(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.message.from_user.id
     if chat_id in ADMINS:
         users_list = []
-        number = 0
+        number = 1
         for user in get_all_users_sorted():
             users_list.append(
-                f"""{number}. <a href="tg://user?id={user[3]}">{user[1]}</a>, @{user[2]}, (<code>{user[3]}</code>)
-status: {user[4]}
-drinks today: {user[5]}
-drinks in total: {user[6]}
+                f"""{number}. <a href="tg://user?id={user[0]}">{user[1]}</a>, @{user[2]}, (<code>{user[0]}</code>)
+status: {user[3]}
+drinks today: {user[4]}
+drinks in total: {user[5]}
 """
             )
             number += 1
@@ -553,11 +618,13 @@ app.add_handler(CommandHandler("help", help_command))
 app.add_handler(CommandHandler("today", today_command))
 app.add_handler(CommandHandler("enable", enable_reminding))
 app.add_handler(CommandHandler("disable", disable_reminding))
+app.add_handler(CommandHandler("settings", settings))
 app.add_handler(CommandHandler("all_users", show_all_users))
 app.add_handler(CommandHandler("admin_message", send_admin_message))
 app.add_handler(CommandHandler("leaderboard", leaderboard_command))
 app.add_handler(ChatMemberHandler(track_chat_member))
 app.add_handler(CallbackQueryHandler(drank_button, pattern=r"^drank:"))
 app.add_handler(CallbackQueryHandler(leaderboard_button, pattern=r"^(today|all)$"))
+app.add_handler(CallbackQueryHandler(settings_button, pattern=r"^settings:"))
 
 app.run_polling()

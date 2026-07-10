@@ -261,11 +261,8 @@ def get_all_enabled_users():
 def get_all_users_sorted():
 
     cursor = conn.cursor()
-    cursor.execute("SELECT * FROM users ORDER BY drinks_total DESC")
-    result = cursor.fetchall()
-
-    users = [user for user in result]
-    return users
+    cursor.execute("SELECT chat_id, name, username, status, drinks_today, drinks_total FROM users ORDER BY drinks_total DESC")
+    return cursor.fetchall()
 
 
 # ========== USER SETTINGS ==========
@@ -283,6 +280,50 @@ def get_chat_settings(chat_id):
     result = cursor.fetchone()
 
     return result if result else (9, 22, 14)
+
+def update_chat_settings(chat_id, setting_name, direction):
+    """
+    تنظیمات مربوط به ساعت شروع، پایان و تعداد ریمایندرها را به‌صورت داینامیک تغییر می‌دهد.
+    """
+    cursor = conn.cursor()
+    
+
+    cursor.execute("SELECT chat_type FROM chats WHERE chat_id = ?", (chat_id,))
+    chat_row = cursor.fetchone()
+    table = "chats" if (chat_row and chat_row[0] in ["group", "supergroup"]) else "users"
+    
+
+    cursor.execute(f"SELECT {setting_name} FROM {table} WHERE chat_id = ?", (chat_id,))
+    row = cursor.fetchone()
+    current_value = row[0] if row else (14 if setting_name == "total_reminders" else (9 if setting_name == "start_hour" else 22))
+
+
+    change = 1 if direction == "plus" else -1
+    new_value = current_value + change
+
+
+    if setting_name == "total_reminders":
+        if new_value < 8 or new_value > 14:
+            return False, current_value
+        
+
+    elif setting_name in ["start_hour", "end_hour"]:
+        if new_value > 23:
+            new_value = 0
+        elif new_value < 0:
+            new_value = 23
+
+
+    cursor.execute(f"UPDATE {table} SET {setting_name} = ? WHERE chat_id = ?", (new_value, chat_id))
+    conn.commit()
+
+    return True, new_value
+
+def get_chat_cooldown_rules(chat_id):
+    cursor = conn.cursor()
+    cursor.execute("SELECT cooldown_seconds, last_drink_time FROM users WHERE chat_id=?", (chat_id,))
+    row = cursor.fetchone()
+    return row if row else (2160, 0)
 
 
 # ========== DRINKS FUNCTIONS ==========
@@ -347,23 +388,6 @@ def get_group_drinks_total(chat_id):
     result = cursor.fetchone()
     return result[0] if result and result[0] else 0
 
-def drinks_today_reset():
-
-    cursor = conn.cursor()
-
-    cursor.execute("""
-        UPDATE users 
-        SET streak_count = streak_count + 1 
-        WHERE drinks_today >= 8
-    """)
-    cursor.execute("""
-        UPDATE users 
-        SET streak_count = 0 
-        WHERE drinks_today < 8
-    """)
-    cursor.execute("UPDATE users SET drinks_today=0")
-
-    conn.commit()
 
 
 # ========== REMINDER CLAIMS ==========
